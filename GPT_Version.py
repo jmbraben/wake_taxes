@@ -9,9 +9,13 @@ from multiprocessing import Pool
 if not os.path.exists('tax_records'):
     os.makedirs('tax_records')
 
-def download_extract(url):
+def download_extract(url,index):
     # Send a GET request to the URL
-    response = requests.get(url)
+    try:
+        response = requests.get(url, timeout=3)
+    except requests.Timeout:
+        print(index, url)
+        return(None)
 
     # Check if the request was successful (status code 200)
     if response.status_code == 200:
@@ -39,11 +43,21 @@ def download_extract(url):
                     if len(columns) >= 2:
                         key = columns[0].text.strip()
                         value = columns[1].text.strip()
+                        # try and extract number from the data
                         num_test = re.sub('[,\$]','',value)
                         if (re.search('^\s*-*[0-9]+\s*$',num_test)):
                             value = int(num_test)
                         elif (re.search('^\s*-*[0-9.]+\s*$',num_test)):
                             value = float(num_test)
+                        else:
+                            #handle special cases of "()" numeric formatting
+                            test_pos=re.split('^\$([0-9]+)',re.sub(',','',value))
+                            test_neg=re.split('^\(\$([0-9]+)\)',re.sub(',','',value))
+                            if(len(test_pos) > 1):
+                                value = int(test_pos[1])
+                            if(len(test_neg) > 1):
+                                value = - int(test_neg[1])
+
                         if prev_key:
                             data[prev_key] += '|' + value
                             prev_key = None
@@ -65,18 +79,17 @@ def download_extract(url):
                     # print(panel)
             else:
                 # Extract "Real Estate ID" value from panel-heading
-                reid = ''
-                pin = ''
-                location = ''
                 pattern = "Real Estate ID:\s+([0-9]+)\s+PIN:\s+(([0-9]+ )+).*\s+Location:\s+([ \w]+)"
                 reid_split =  re.split(pattern,panel.find('div', class_='panel-heading').text)
                 if len(reid_split) == 6:
                     [_,reid,pin,_,location,_] = reid_split
-                all_data.update({'heading':{'reid':reid,'pin':pin,'location':location}})                
+                    all_data.update({'heading':{'reid':reid,'pin':pin,'location':location}})                
+                else:
+                    # Invalid Data
+                    return(None)
 
         return(all_data)
     else:
-        print(f'Failed to download {url}. Status was {response.status_code}')
         return (None)
 
 
@@ -87,7 +100,54 @@ base_revaluation_url = 'https://services.wake.gov/TaxPortal/TaxCalculator/Calcul
 def download(index):
     property={'index':index, 'summary': None, 'revaluation': None}
     url = f'{base_url}{index}'
-    property.update({'summary': download_extract(url)})
+    db_data = {
+        'id' : index,
+        'status' : 'No Data',
+        'reid' : '',
+        'Owners': '',
+        'Location' : '',
+        'CorporateLimit' : '',
+        'PJ' : '',
+        'Zoning' : '',
+        'Township' : '',
+        'BuildingUse' : '',
+        'NBHD' : '',
+        'LandClass' : '',
+        'DeedDate' : '',
+        'SalePrice' : 0,
+
+        'HeatedArea' : 0,
+        'Buildings' : 0,
+        'OutBuildings' : 0,
+        'LandValue' : 0,
+        'BuldingValue' : 0,
+        'TotalValue' : 0,
+        'Exempt' : 0,
+        'UseValueDeferred' : 0,
+        'HistoricalDeferral' : 0,
+        'TaxRelief' : 0,
+        'DisabledVeteransExclusion' : 0,
+        'TotalAdjustmentValue' : 0,
+        'ValueToBeBilled' : 0,
+        'PctBilled' : 0,
+
+        'pHeatedArea' : 0,
+        'pBuildings' : 0,
+        'pOutBuildings' : 0,
+        'pLandValue' : 0,
+        'pBuldingValue' : 0,
+        'pTotalValue' : 0,
+        'pExempt' : 0,
+        'pUseValueDeferred' : 0,
+        'pHistoricalDeferral' : 0,
+        'pTaxRelief' : 0,
+        'pDisabledVeteransExclusion' : 0,
+        'pTotalAdjustmentValue' : 0,
+        'pValueToBeBilled' : 0,
+
+        'ChangeInValue' : 0,
+    }
+
     # Connect to SQLite database
     conn = sqlite3.connect(database_file)
     cursor = conn.cursor()
@@ -95,30 +155,79 @@ def download(index):
     # Create a table if not exists
     cursor.execute('''CREATE TABLE IF NOT EXISTS tax_records (
                     id INTEGER PRIMARY KEY,
-                    reid TEXT,
-                    data TEXT
+                    status TEXT,
+                    reid TEXT, Owners TEXT, Location TEXT, CorporateLimit TEXT, PJ TEXT, Zoning TEXT, Township TEXT, BuildingUse TEXT, NBHD TEXT, LandClass TEXT, DeedDate TEXT, SalePrice REAL,
+                    HeatedArea REAL, Buildings REAL, OutBuildings REAL, LandValue REAL, BuldingValue REAL, TotalValue REAL, Exempt REAL, UseValueDeferred REAL, HistoricalDeferral REAL, TaxRelief REAL, DisabledVeteransExclusion REAL, TotalAdjustmentValue REAL, ValueToBeBilled REAL,
+                    PctBilled REAL,
+                    pHeatedArea REAL, pBuildings REAL, pOutBuildings REAL, pLandValue REAL, pBuldingValue REAL, pTotalValue REAL, pExempt REAL, pUseValueDeferred REAL, pHistoricalDeferral REAL, pTaxRelief REAL, pDisabledVeteransExclusion REAL, pTotalAdjustmentValue REAL, pValueToBeBilled REAL,
+                    ChangeInValue REAL                  
                     )''')
-    
+    cursor.execute('''CREATE TABLE IF NOT EXISTS raw_data (
+                    id INTEGER PRIMARY KEY,
+                    raw TEXT
+                    )''')    
+    property.update({'summary': download_extract(url,index)})
     if (property['summary']):
-        url = f"{base_revaluation_url}{property['summary']['heading']['reid']}"
-        property.update({'revaluation': download_extract(url)})
+        db_data.update({
+            'status' : 'No Revaluation',
+            'reid' : property['summary']['heading']['reid'],
+            'Owners': property['summary']['Ownership']['Owners:'],
+            'Location' : property['summary']['Ownership']['Location'],
+            'CorporateLimit' : property['summary']['AdministrativeInformation']['Corporate Limit:'],
+            'PJ' : property['summary']['AdministrativeInformation']['PJ:'],
+            'Zoning' : property['summary']['AdministrativeInformation']['Zoning:'],
+            'Township' : property['summary']['AdministrativeInformation']['Township:'],
+            'BuildingUse' : property['summary']['PropertyType']['Building Type & Use:'],
+            'NBHD' : property['summary']['PropertyType']['VCS (NBHD):'],
+            'LandClass' : property['summary']['PropertyType']['Land Class:'],
+            'DeedDate' : property['summary']['TransferInformation']['Deed Date:'],
+            'SalePrice' : property['summary']['TransferInformation']['Pkg Sale Price:'],
 
-    db_data = {
-        'index' : index,
-        'reid' : property['summary']['heading']['reid'],
-        'Owners': property['summary']['Ownership']['Owners:'],
-        'Location' : property['summary']['Ownership']['Location'],
-        'CorporateLimit' : property['summary']['AdministrativeInformation']['Corporate Limit:'],
-        'PJ' : property['summary']['AdministrativeInformation']['PJ:'],
-        'Zoning' : property['summary']['AdministrativeInformation']['Zoning:'],
-        'Township' : property['summary']['AdministrativeInformation']['Township:'],
-        'HeatedArea' : property['summary']['PropertyValueTotals']['Total Heated Area:'],
-        'Buildings' : property['summary']['PropertyValueTotals']['Building(s):'],
-        'OutBuildings' : property['summary']['PropertyValueTotals']['Outbuilding(s):'],
-    }
+            'HeatedArea' : property['summary']['PropertyValueTotals']['Total Heated Area:'],
+            'Buildings' : property['summary']['PropertyValueTotals']['Building(s):'],
+            'OutBuildings' : property['summary']['PropertyValueTotals']['Outbuilding(s):'],
+            'LandValue' : property['summary']['PropertyValueTotals']['Land Value (Assessed):'],
+            'BuldingValue' : property['summary']['PropertyValueTotals']['Building Value (Assessed):'],
+            'TotalValue' : property['summary']['PropertyValueTotals']['Total Value (Assessed):'],
+            'Exempt' : property['summary']['ValueAdjustmentTotals']['Exempt:'],
+            'UseValueDeferred' : property['summary']['ValueAdjustmentTotals']['Use Value Deferred:'],
+            'HistoricalDeferral' : property['summary']['ValueAdjustmentTotals']['Historical Deferral:'],
+            'TaxRelief' : property['summary']['ValueAdjustmentTotals']['Tax Relief:'],
+            'DisabledVeteransExclusion' : property['summary']['ValueAdjustmentTotals']['Disabled Veterans Exclusion:'],
+            'TotalAdjustmentValue' : property['summary']['ValueAdjustmentTotals']['Total Adjustment Value:'],
+            'ValueToBeBilled' : property['summary']['ValueAdjustmentTotals']['Value to be Billed:'],
+        })
+        if (db_data['TotalValue'] > 0):
+            # WTH are properties valued at $0?
+            db_data.update({'PctBilled': (db_data['ValueToBeBilled']/db_data['TotalValue'])})
+        
+        url = f"{base_revaluation_url}{property['summary']['heading']['reid']}"
+        property.update({'revaluation': download_extract(url,index)})
+        if (property['revaluation']):
+            db_data.update({
+                'status' : 'Complete',
+                'pHeatedArea' : property['revaluation']['PreviousPropertyValueTotals']['Total Heated Area:'],
+                'pBuildings' : property['revaluation']['PreviousPropertyValueTotals']['Building(s) :'],
+                'pOutBuildings' : property['revaluation']['PreviousPropertyValueTotals']['Outbuilding(s) :'],
+                'pLandValue' : property['revaluation']['PreviousPropertyValueTotals']['Land Value (Assessed) :'],
+                'pBuldingValue' : property['revaluation']['PreviousPropertyValueTotals']['Building Value (Assessed) :'],
+                'pTotalValue' : property['revaluation']['PreviousPropertyValueTotals']['Total Value (Assessed) :'],
+                'pExempt' : property['revaluation']['PreviousValueAdjustmentTotals']['Exempt:'],
+                'pUseValueDeferred' : property['revaluation']['PreviousValueAdjustmentTotals']['Use Value Deferred:'],
+                'pHistoricalDeferral' : property['revaluation']['PreviousValueAdjustmentTotals']['Historical Value Deferred:'],
+                'pTaxRelief' : property['revaluation']['PreviousValueAdjustmentTotals']['Tax Relief:'],
+                'pDisabledVeteransExclusion' : property['revaluation']['PreviousValueAdjustmentTotals']['Disabled Veterans Exclusion:'],
+                'pTotalAdjustmentValue' : property['revaluation']['PreviousValueAdjustmentTotals']['Total Adjustment Value:'],
+                'pValueToBeBilled' : property['revaluation']['PreviousValueAdjustmentTotals']['Value To Be Billed:'],
+            })
+            if (db_data['pValueToBeBilled'] > 0):
+                db_data.update({'ChangeInValue': (db_data['ValueToBeBilled']/db_data['pValueToBeBilled'])})
 
     # Insert the record into the database
-    cursor.execute('''INSERT OR REPLACE INTO tax_records (id, reid, data) VALUES (?, ?, ?)''', (index, property['summary']['heading']['reid'], str(property)))
+    cursor.execute('''INSERT OR REPLACE INTO tax_records VALUES (:id,:status,:reid,:Owners,:Location,:CorporateLimit,:PJ,:Zoning,:Township,:BuildingUse,:NBHD,:LandClass,:DeedDate,:SalePrice,
+                   :HeatedArea,:Buildings,:OutBuildings,:LandValue,:BuldingValue,:TotalValue,:Exempt,:UseValueDeferred,:HistoricalDeferral,:TaxRelief,:DisabledVeteransExclusion,:TotalAdjustmentValue,:ValueToBeBilled,:PctBilled,
+                   :pHeatedArea,:pBuildings,:pOutBuildings,:pLandValue,:pBuldingValue,:pTotalValue,:pExempt,:pUseValueDeferred,:pHistoricalDeferral,:pTaxRelief,:pDisabledVeteransExclusion,:pTotalAdjustmentValue,:pValueToBeBilled,:ChangeInValue)''', db_data)
+    cursor.execute('''INSERT OR REPLACE INTO raw_data (id, raw) VALUES (?, ?)''', (index, str(property)))
     conn.commit()
     conn.close()
 
@@ -126,12 +235,11 @@ def download(index):
 
 # Function to download tax records, extract keys and values, and insert them into the database
 def download_extract_and_store_tax_records(start, end, db_file):
-
-
     # Iterate over the sequential URLs
     #for i in range(start, end + 1,10):
+    #    print(i)
     #    with Pool(10) as p:
-    #        print(p.map(download,list(range(i,i+10))))
+    #        data=p.map(download,list(range(i,i+10)))
     for i in range(start, end + 1):
         print(download(i))
 
@@ -141,8 +249,9 @@ def download_extract_and_store_tax_records(start, end, db_file):
 
 
 # Define the range of tax records to download
-start_record = 29993
-end_record = 29993  # Adjust as needed
+# Test Records 29949 (missing valuation), 550000 (no property)
+start_record = 12582
+end_record = 99999  # Adjust as needed
 
 # Define the database file
 database_file = 'tax_records.db'
