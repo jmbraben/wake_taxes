@@ -5,10 +5,6 @@ import re
 import sqlite3
 from multiprocessing import Pool
 
-# Create a directory to save downloaded HTML files
-if not os.path.exists('tax_records'):
-    os.makedirs('tax_records')
-
 def download_extract(url,index):
     # Send a GET request to the URL
     try:
