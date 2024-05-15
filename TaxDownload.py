@@ -5,6 +5,9 @@ import re
 import sqlite3
 from multiprocessing import Pool
 
+# Define the database file
+database_file = 'tax_records.db'
+
 def download_extract(url,index):
     # Send a GET request to the URL
     try:
@@ -193,6 +196,9 @@ def download(index):
             'TotalAdjustmentValue' : property['summary']['ValueAdjustmentTotals']['Total Adjustment Value:'],
             'ValueToBeBilled' : property['summary']['ValueAdjustmentTotals']['Value to be Billed:'],
         })
+
+        if (type(db_data['TotalValue']) not in ['int', 'float']):
+            db_data['TotalValue'] = 0
         if (db_data['TotalValue'] > 0):
             # WTH are properties valued at $0?
             db_data.update({'PctBilled': (db_data['ValueToBeBilled']/db_data['TotalValue'])})
@@ -216,6 +222,9 @@ def download(index):
                 'pTotalAdjustmentValue' : property['revaluation']['PreviousValueAdjustmentTotals']['Total Adjustment Value:'],
                 'pValueToBeBilled' : property['revaluation']['PreviousValueAdjustmentTotals']['Value To Be Billed:'],
             })
+            if (type(db_data['pValueToBeBilled']) not in ['int', 'float']):
+                db_data['pValueToBeBilled'] = 0
+
             if (db_data['pValueToBeBilled'] > 0):
                 db_data.update({'ChangeInValue': (db_data['ValueToBeBilled']/db_data['pValueToBeBilled'])})
 
@@ -229,31 +238,24 @@ def download(index):
 
     return(property)
 
-# Function to download tax records, extract keys and values, and insert them into the database
-def download_extract_and_store_tax_records(start, end, db_file):
-    # Iterate over the sequential URLs
-    for i in range(start, end + 1,10):
-        print(i)
-        with Pool(10) as p:
-            data=p.map(download,list(range(i,i+10)))
-    #for i in range(start, end + 1):
-    #    print(download(i))
-
-
-    # Close the database connection
-    print('All tax records downloaded, keys and values extracted, and stored in the database.')
-
 
 # Define the range of tax records to download
 # Test Records 29949 (missing valuation), 550000 (no property)
-start_record = 36070
-end_record = 99999  # Adjust as needed
-
-# Define the database file
-database_file = 'tax_records.db'
-
-# Download tax records, extract keys and values, and store them in the database
-download_extract_and_store_tax_records(start_record, end_record, database_file)
+start_record = 539550
+end_record = 544999  # Adjust as needed
 
 # retry list
-retry=[39557,51155,56374,61581,61927,65275,66041,66043,67379,67480,67795,71197,73192,79985,80759,81079,84279,85673,92246,94144,94843,96631,96824,98334,98907,99370]
+retry=[168650,309837,313288
+]
+
+# Download tax records, extract keys and values, and store them in the database
+
+# Iterate over the sequential URLs
+#for i in range(start_record, end_record + 1,10):
+#    print(i)
+#    with Pool(10) as p:
+#        data=p.map(download,list(range(i,i+10)))
+for i in retry:
+    print(download(i))
+
+print('All tax records downloaded, keys and values extracted, and stored in the database.')
