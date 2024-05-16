@@ -5,8 +5,22 @@ import re
 import sqlite3
 from multiprocessing import Pool
 
-# Define the database file
-database_file = 'tax_records.db'
+def check_retired(url,index):
+    retired = False
+    # Send a GET request to the URL
+    try:
+        response = requests.get(url, timeout=3)
+    except requests.Timeout:
+        print(index, url)
+        return(None)
+    # Check if the request was successful (status code 200)
+    if response.status_code == 200:
+        html_content = response.text
+        soup = BeautifulSoup(html_content, 'html.parser')
+        # look for retired string
+        if soup.body.findAll(string=re.compile('Retired Parcel Archive'), limit=1):
+            retired = True
+    return (retired)
 
 def download_extract(url,index):
     # Send a GET request to the URL
@@ -95,6 +109,7 @@ def download_extract(url,index):
 # Base URL
 base_url = 'https://services.wake.gov/TaxPortal/Property/Details/'
 base_revaluation_url = 'https://services.wake.gov/TaxPortal/TaxCalculator/CalculateTaxes/'
+base_account_url = 'https://services.wake.gov/realestate/Account.asp?id='
 
 def download(index):
     property={'index':index, 'summary': None, 'revaluation': None}
@@ -203,30 +218,36 @@ def download(index):
             # WTH are properties valued at $0?
             db_data.update({'PctBilled': (db_data['ValueToBeBilled']/db_data['TotalValue'])})
         
-        url = f"{base_revaluation_url}{property['summary']['heading']['reid']}"
-        property.update({'revaluation': download_extract(url,index)})
-        if (property['revaluation']):
-            db_data.update({
-                'status' : 'Complete',
-                'pHeatedArea' : property['revaluation']['PreviousPropertyValueTotals']['Total Heated Area:'],
-                'pBuildings' : property['revaluation']['PreviousPropertyValueTotals']['Building(s) :'],
-                'pOutBuildings' : property['revaluation']['PreviousPropertyValueTotals']['Outbuilding(s) :'],
-                'pLandValue' : property['revaluation']['PreviousPropertyValueTotals']['Land Value (Assessed) :'],
-                'pBuldingValue' : property['revaluation']['PreviousPropertyValueTotals']['Building Value (Assessed) :'],
-                'pTotalValue' : property['revaluation']['PreviousPropertyValueTotals']['Total Value (Assessed) :'],
-                'pExempt' : property['revaluation']['PreviousValueAdjustmentTotals']['Exempt:'],
-                'pUseValueDeferred' : property['revaluation']['PreviousValueAdjustmentTotals']['Use Value Deferred:'],
-                'pHistoricalDeferral' : property['revaluation']['PreviousValueAdjustmentTotals']['Historical Value Deferred:'],
-                'pTaxRelief' : property['revaluation']['PreviousValueAdjustmentTotals']['Tax Relief:'],
-                'pDisabledVeteransExclusion' : property['revaluation']['PreviousValueAdjustmentTotals']['Disabled Veterans Exclusion:'],
-                'pTotalAdjustmentValue' : property['revaluation']['PreviousValueAdjustmentTotals']['Total Adjustment Value:'],
-                'pValueToBeBilled' : property['revaluation']['PreviousValueAdjustmentTotals']['Value To Be Billed:'],
-            })
-            if (type(db_data['pValueToBeBilled']) not in ['int', 'float']):
-                db_data['pValueToBeBilled'] = 0
+        # check if REID is retired
+        url = f"{base_account_url}{property['summary']['heading']['reid']}"
+        if (False == check_retired(url,index)):
+            # check the revaluation data
+            url = f"{base_revaluation_url}{property['summary']['heading']['reid']}"
+            property.update({'revaluation': download_extract(url,index)})
+            if (property['revaluation']):
+                db_data.update({
+                    'status' : 'Complete',
+                    'pHeatedArea' : property['revaluation']['PreviousPropertyValueTotals']['Total Heated Area:'],
+                    'pBuildings' : property['revaluation']['PreviousPropertyValueTotals']['Building(s) :'],
+                    'pOutBuildings' : property['revaluation']['PreviousPropertyValueTotals']['Outbuilding(s) :'],
+                    'pLandValue' : property['revaluation']['PreviousPropertyValueTotals']['Land Value (Assessed) :'],
+                    'pBuldingValue' : property['revaluation']['PreviousPropertyValueTotals']['Building Value (Assessed) :'],
+                    'pTotalValue' : property['revaluation']['PreviousPropertyValueTotals']['Total Value (Assessed) :'],
+                    'pExempt' : property['revaluation']['PreviousValueAdjustmentTotals']['Exempt:'],
+                    'pUseValueDeferred' : property['revaluation']['PreviousValueAdjustmentTotals']['Use Value Deferred:'],
+                    'pHistoricalDeferral' : property['revaluation']['PreviousValueAdjustmentTotals']['Historical Value Deferred:'],
+                    'pTaxRelief' : property['revaluation']['PreviousValueAdjustmentTotals']['Tax Relief:'],
+                    'pDisabledVeteransExclusion' : property['revaluation']['PreviousValueAdjustmentTotals']['Disabled Veterans Exclusion:'],
+                    'pTotalAdjustmentValue' : property['revaluation']['PreviousValueAdjustmentTotals']['Total Adjustment Value:'],
+                    'pValueToBeBilled' : property['revaluation']['PreviousValueAdjustmentTotals']['Value To Be Billed:'],
+                })
+                if (type(db_data['pValueToBeBilled']) not in ['int', 'float']):
+                    db_data['pValueToBeBilled'] = 0
 
-            if (db_data['pValueToBeBilled'] > 0):
-                db_data.update({'ChangeInValue': (db_data['ValueToBeBilled']/db_data['pValueToBeBilled'])})
+                if (db_data['pValueToBeBilled'] > 0):
+                    db_data.update({'ChangeInValue': (db_data['ValueToBeBilled']/db_data['pValueToBeBilled'])})
+        else:
+            db_data.update({'status' : 'Retired'})
 
     # Insert the record into the database
     cursor.execute('''INSERT OR REPLACE INTO tax_records VALUES (:id,:status,:reid,:Owners,:Location,:CorporateLimit,:PJ,:Zoning,:Township,:BuildingUse,:NBHD,:LandClass,:DeedDate,:SalePrice,
@@ -238,24 +259,68 @@ def download(index):
 
     return(property)
 
+# Parses input arguments from the command line
+def parse_args():
+    import argparse
 
-# Define the range of tax records to download
-# Test Records 29949 (missing valuation), 550000 (no property)
-start_record = 539550
-end_record = 544999  # Adjust as needed
+    # Allow command line arguments
+    parser = argparse.ArgumentParser(
+        description="Script to acquire tax data",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+    )
 
-# retry list
-retry=[168650,309837,313288
-]
+    parser.add_argument(
+        "--range",
+        dest="range",
+        nargs=2,
+        help="set a range of id's to download <min> <max-1>",
+    )
+    parser.add_argument(
+        "--file",
+        dest="fn",
+        help="specify a file with id's to download (one per line)",
+    )
+    # Define the database file name
+    parser.add_argument(
+        "--db",
+        dest="db",
+        help="specify a name for the database",
+        default = 'tax_records.db'
+    )
 
-# Download tax records, extract keys and values, and store them in the database
+    args = parser.parse_args()
 
-# Iterate over the sequential URLs
-#for i in range(start_record, end_record + 1,10):
-#    print(i)
-#    with Pool(10) as p:
-#        data=p.map(download,list(range(i,i+10)))
-for i in retry:
-    print(download(i))
+    return args
 
-print('All tax records downloaded, keys and values extracted, and stored in the database.')
+if __name__ == "__main__":
+    args = parse_args()
+    database_file = args.db
+
+    # Define the range of tax records to download
+    # Test Records 29949 (missing valuation), 550000 (no property)
+
+    # create the range
+    id_list=[]
+    if args.range:
+        id_list = list(range(int(args.range[0]), int(args.range[1])))
+    elif args.fn:
+        with open(args.fn, "r") as f:
+            lines= f.readlines()
+            id_list = list(map(int,lines))
+    else:
+        print('must specify range')
+        exit()
+
+    #print (id_list)
+
+    # Download tax records, extract keys and values, and store them in the database
+    pool_count = 10
+    index = 0
+    while index < len(id_list):
+        ids = id_list[index:index+pool_count]
+        with Pool(len(ids)) as p:
+            data = p.map(download,ids)
+            print (ids)
+        index = index + pool_count
+
+    print('All tax records downloaded, keys and values extracted, and stored in the database.')
