@@ -212,8 +212,11 @@ def download(index):
             'ValueToBeBilled' : property['summary']['ValueAdjustmentTotals']['Value to be Billed:'],
         })
 
-        if (type(db_data['TotalValue']) not in ['int', 'float']):
+        try:
+            float(db_data['TotalValue'])
+        except:
             db_data['TotalValue'] = 0
+
         if (db_data['TotalValue'] > 0):
             # WTH are properties valued at $0?
             db_data.update({'PctBilled': (db_data['ValueToBeBilled']/db_data['TotalValue'])})
@@ -241,14 +244,16 @@ def download(index):
                     'pTotalAdjustmentValue' : property['revaluation']['PreviousValueAdjustmentTotals']['Total Adjustment Value:'],
                     'pValueToBeBilled' : property['revaluation']['PreviousValueAdjustmentTotals']['Value To Be Billed:'],
                 })
-                if (type(db_data['pValueToBeBilled']) not in ['int', 'float']):
+                try:
+                    float(db_data['pValueToBeBilled'])
+                except:
                     db_data['pValueToBeBilled'] = 0
 
                 if (db_data['pValueToBeBilled'] > 0):
                     db_data.update({'ChangeInValue': (db_data['ValueToBeBilled']/db_data['pValueToBeBilled'])})
         else:
             db_data.update({'status' : 'Retired'})
-
+    print(db_data)
     # Insert the record into the database
     cursor.execute('''INSERT OR REPLACE INTO tax_records VALUES (:id,:status,:reid,:Owners,:Location,:CorporateLimit,:PJ,:Zoning,:Township,:BuildingUse,:NBHD,:LandClass,:DeedDate,:SalePrice,
                    :HeatedArea,:Buildings,:OutBuildings,:LandValue,:BuldingValue,:TotalValue,:Exempt,:UseValueDeferred,:HistoricalDeferral,:TaxRelief,:DisabledVeteransExclusion,:TotalAdjustmentValue,:ValueToBeBilled,:PctBilled,
