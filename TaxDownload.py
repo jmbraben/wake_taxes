@@ -117,21 +117,6 @@ def download(index):
 
     cursor = conn.cursor()
 
-    # Create a table if not exists
-    cursor.execute('''CREATE TABLE IF NOT EXISTS tax_records (
-                    id INTEGER PRIMARY KEY,
-                    status TEXT,
-                    reid TEXT, Owners TEXT, Location TEXT, CorporateLimit TEXT, PJ TEXT, Zoning TEXT, Township TEXT, BuildingUse TEXT, NBHD TEXT, LandClass TEXT, BillingClass TEXT, DeedDate TEXT, SalePrice REAL,
-                    HeatedArea REAL, Buildings REAL, OutBuildings REAL, LandValue REAL, BuldingValue REAL, TotalValue REAL, Exempt REAL, UseValueDeferred REAL, HistoricalDeferral REAL, TaxRelief REAL, DisabledVeteransExclusion REAL, TotalAdjustmentValue REAL, ValueToBeBilled REAL,
-                    PctBilled REAL,
-                    pHeatedArea REAL, pBuildings REAL, pOutBuildings REAL, pLandValue REAL, pBuldingValue REAL, pTotalValue REAL, pExempt REAL, pUseValueDeferred REAL, pHistoricalDeferral REAL, pTaxRelief REAL, pDisabledVeteransExclusion REAL, pTotalAdjustmentValue REAL, pValueToBeBilled REAL,
-                    ChangeInValue REAL                  
-                    )''')
-    cursor.execute('''CREATE TABLE IF NOT EXISTS raw_data (
-                    id INTEGER PRIMARY KEY,
-                    status TEXT,
-                    raw TEXT
-                    )''')
     if rebuild:
         cursor.execute('''SELECT status, raw FROM raw_data WHERE id = ?''', (index,))
         raw = cursor.fetchone()
@@ -149,8 +134,6 @@ def download(index):
                     status = 'Complete'
                 else:
                     status = 'Retired'
-        cursor.execute('''INSERT OR REPLACE INTO raw_data (id, status, raw) VALUES (?, ?, ?)''', (index, status, str(property)))
-
     db_data = {
         'id' : index,
         'status' : status,
@@ -262,13 +245,8 @@ def download(index):
 
         if (db_data['pValueToBeBilled'] > 0):
             db_data.update({'ChangeInValue': (db_data['ValueToBeBilled']/db_data['pValueToBeBilled'])})
-    # Insert the record into the database
-    cursor.execute('''INSERT OR REPLACE INTO tax_records VALUES (:id,:status,:reid,:Owners,:Location,:CorporateLimit,:PJ,:Zoning,:Township,:BuildingUse,:NBHD,:LandClass,:BillingClass,:DeedDate,:SalePrice,
-                   :HeatedArea,:Buildings,:OutBuildings,:LandValue,:BuldingValue,:TotalValue,:Exempt,:UseValueDeferred,:HistoricalDeferral,:TaxRelief,:DisabledVeteransExclusion,:TotalAdjustmentValue,:ValueToBeBilled,:PctBilled,
-                   :pHeatedArea,:pBuildings,:pOutBuildings,:pLandValue,:pBuldingValue,:pTotalValue,:pExempt,:pUseValueDeferred,:pHistoricalDeferral,:pTaxRelief,:pDisabledVeteransExclusion,:pTotalAdjustmentValue,:pValueToBeBilled,:ChangeInValue)''', db_data)
-    conn.commit()
 
-    return(status, property, db_data)
+    return({'i':index,'s':status, 'p': property, 'd': db_data})
 
 # Parses input arguments from the command line
 def parse_args():
@@ -332,15 +310,42 @@ if __name__ == "__main__":
     # Download tax records, extract keys and values, and store them in the database
     pool_count = 10
     index = 0
+
+    # Connect to SQLite database
+    conn = sqlite3.connect(database_file)
+    cursor = conn.cursor()
+    # Create a table if not exists
+    cursor.execute('''CREATE TABLE IF NOT EXISTS tax_records (
+                    id INTEGER PRIMARY KEY,
+                    status TEXT,
+                    reid TEXT, Owners TEXT, Location TEXT, CorporateLimit TEXT, PJ TEXT, Zoning TEXT, Township TEXT, BuildingUse TEXT, NBHD TEXT, LandClass TEXT, BillingClass TEXT, DeedDate TEXT, SalePrice REAL,
+                    HeatedArea REAL, Buildings REAL, OutBuildings REAL, LandValue REAL, BuldingValue REAL, TotalValue REAL, Exempt REAL, UseValueDeferred REAL, HistoricalDeferral REAL, TaxRelief REAL, DisabledVeteransExclusion REAL, TotalAdjustmentValue REAL, ValueToBeBilled REAL,
+                    PctBilled REAL,
+                    pHeatedArea REAL, pBuildings REAL, pOutBuildings REAL, pLandValue REAL, pBuldingValue REAL, pTotalValue REAL, pExempt REAL, pUseValueDeferred REAL, pHistoricalDeferral REAL, pTaxRelief REAL, pDisabledVeteransExclusion REAL, pTotalAdjustmentValue REAL, pValueToBeBilled REAL,
+                    ChangeInValue REAL                  
+                    )''')
+    cursor.execute('''CREATE TABLE IF NOT EXISTS raw_data (
+                    id INTEGER PRIMARY KEY,
+                    status TEXT,
+                    raw TEXT
+                    )''')
+    
     while index < len(id_list):
-        # Connect to SQLite database
-        conn = sqlite3.connect(database_file)
         ids = id_list[index:index+pool_count]
         with Pool(len(ids)) as p:
-            data = p.map(download,ids)
-        print (ids)
-        conn.close()
+            ret_val = p.map(download,ids)
+        
+        for val in ret_val:
+            if not rebuild:
+                cursor.execute('''INSERT OR REPLACE INTO raw_data (id, status, raw) VALUES (?, ?, ?)''', (val['i'],val['s'], str(val['p'])))
 
+            # Insert the record into the database
+            cursor.execute('''INSERT OR REPLACE INTO tax_records VALUES (:id,:status,:reid,:Owners,:Location,:CorporateLimit,:PJ,:Zoning,:Township,:BuildingUse,:NBHD,:LandClass,:BillingClass,:DeedDate,:SalePrice,
+                        :HeatedArea,:Buildings,:OutBuildings,:LandValue,:BuldingValue,:TotalValue,:Exempt,:UseValueDeferred,:HistoricalDeferral,:TaxRelief,:DisabledVeteransExclusion,:TotalAdjustmentValue,:ValueToBeBilled,:PctBilled,
+                        :pHeatedArea,:pBuildings,:pOutBuildings,:pLandValue,:pBuldingValue,:pTotalValue,:pExempt,:pUseValueDeferred,:pHistoricalDeferral,:pTaxRelief,:pDisabledVeteransExclusion,:pTotalAdjustmentValue,:pValueToBeBilled,:ChangeInValue)''', val['d'])
+        conn.commit()
+        print (ids)
         index = index + pool_count
 
+    conn.close()
     print('All tax records downloaded, keys and values extracted, and stored in the database.')
