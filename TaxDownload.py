@@ -2,6 +2,7 @@ import requests
 from bs4 import BeautifulSoup
 import os
 import re
+import ast
 import sqlite3
 from multiprocessing import Pool
 
@@ -113,10 +114,46 @@ base_account_url = 'https://services.wake.gov/realestate/Account.asp?id='
 
 def download(index):
     property={'index':index, 'summary': None, 'revaluation': None}
-    url = f'{base_url}{index}'
+
+    cursor = conn.cursor()
+
+    # Create a table if not exists
+    cursor.execute('''CREATE TABLE IF NOT EXISTS tax_records (
+                    id INTEGER PRIMARY KEY,
+                    status TEXT,
+                    reid TEXT, Owners TEXT, Location TEXT, CorporateLimit TEXT, PJ TEXT, Zoning TEXT, Township TEXT, BuildingUse TEXT, NBHD TEXT, LandClass TEXT, BillingClass TEXT, DeedDate TEXT, SalePrice REAL,
+                    HeatedArea REAL, Buildings REAL, OutBuildings REAL, LandValue REAL, BuldingValue REAL, TotalValue REAL, Exempt REAL, UseValueDeferred REAL, HistoricalDeferral REAL, TaxRelief REAL, DisabledVeteransExclusion REAL, TotalAdjustmentValue REAL, ValueToBeBilled REAL,
+                    PctBilled REAL,
+                    pHeatedArea REAL, pBuildings REAL, pOutBuildings REAL, pLandValue REAL, pBuldingValue REAL, pTotalValue REAL, pExempt REAL, pUseValueDeferred REAL, pHistoricalDeferral REAL, pTaxRelief REAL, pDisabledVeteransExclusion REAL, pTotalAdjustmentValue REAL, pValueToBeBilled REAL,
+                    ChangeInValue REAL                  
+                    )''')
+    cursor.execute('''CREATE TABLE IF NOT EXISTS raw_data (
+                    id INTEGER PRIMARY KEY,
+                    status TEXT,
+                    raw TEXT
+                    )''')
+    if rebuild:
+        cursor.execute('''SELECT status, raw FROM raw_data WHERE id = ?''', (index,))
+        raw = cursor.fetchone()
+        status = raw[0]
+        property = ast.literal_eval(raw[1])
+    else:
+        status = 'No Data'
+        url = f'{base_url}{index}'
+        property.update({'summary': download_extract(url,index)})
+        if (property['summary']):
+                status = 'No Revaluation'
+                url = f"{base_revaluation_url}{property['summary']['heading']['reid']}"
+                property.update({'revaluation': download_extract(url,index)})
+                if (property['revaluation']):
+                    status = 'Complete'
+                else:
+                    status = 'Retired'
+        cursor.execute('''INSERT OR REPLACE INTO raw_data (id, status, raw) VALUES (?, ?, ?)''', (index, status, str(property)))
+
     db_data = {
         'id' : index,
-        'status' : 'No Data',
+        'status' : status,
         'reid' : '',
         'Owners': '',
         'Location' : '',
@@ -127,6 +164,7 @@ def download(index):
         'BuildingUse' : '',
         'NBHD' : '',
         'LandClass' : '',
+        'BillingClass' : '',
         'DeedDate' : '',
         'SalePrice' : 0,
 
@@ -161,29 +199,8 @@ def download(index):
 
         'ChangeInValue' : 0,
     }
-
-    # Connect to SQLite database
-    conn = sqlite3.connect(database_file)
-    cursor = conn.cursor()
-
-    # Create a table if not exists
-    cursor.execute('''CREATE TABLE IF NOT EXISTS tax_records (
-                    id INTEGER PRIMARY KEY,
-                    status TEXT,
-                    reid TEXT, Owners TEXT, Location TEXT, CorporateLimit TEXT, PJ TEXT, Zoning TEXT, Township TEXT, BuildingUse TEXT, NBHD TEXT, LandClass TEXT, DeedDate TEXT, SalePrice REAL,
-                    HeatedArea REAL, Buildings REAL, OutBuildings REAL, LandValue REAL, BuldingValue REAL, TotalValue REAL, Exempt REAL, UseValueDeferred REAL, HistoricalDeferral REAL, TaxRelief REAL, DisabledVeteransExclusion REAL, TotalAdjustmentValue REAL, ValueToBeBilled REAL,
-                    PctBilled REAL,
-                    pHeatedArea REAL, pBuildings REAL, pOutBuildings REAL, pLandValue REAL, pBuldingValue REAL, pTotalValue REAL, pExempt REAL, pUseValueDeferred REAL, pHistoricalDeferral REAL, pTaxRelief REAL, pDisabledVeteransExclusion REAL, pTotalAdjustmentValue REAL, pValueToBeBilled REAL,
-                    ChangeInValue REAL                  
-                    )''')
-    cursor.execute('''CREATE TABLE IF NOT EXISTS raw_data (
-                    id INTEGER PRIMARY KEY,
-                    raw TEXT
-                    )''')    
-    property.update({'summary': download_extract(url,index)})
     if (property['summary']):
         db_data.update({
-            'status' : 'No Revaluation',
             'reid' : property['summary']['heading']['reid'],
             'Owners': property['summary']['Ownership']['Owners:'],
             'Location' : property['summary']['Ownership']['Location'],
@@ -194,6 +211,7 @@ def download(index):
             'BuildingUse' : property['summary']['PropertyType']['Building Type & Use:'],
             'NBHD' : property['summary']['PropertyType']['VCS (NBHD):'],
             'LandClass' : property['summary']['PropertyType']['Land Class:'],
+            'BillingClass' : property['summary']['PropertyType']['Billing Class:'],
             'DeedDate' : property['summary']['TransferInformation']['Deed Date:'],
             'SalePrice' : property['summary']['TransferInformation']['Pkg Sale Price:'],
 
@@ -220,49 +238,37 @@ def download(index):
         if (db_data['TotalValue'] > 0):
             # WTH are properties valued at $0?
             db_data.update({'PctBilled': (db_data['ValueToBeBilled']/db_data['TotalValue'])})
-        
-        # check if REID is retired
-        url = f"{base_account_url}{property['summary']['heading']['reid']}"
-        if (False == check_retired(url,index)):
-            # check the revaluation data
-            url = f"{base_revaluation_url}{property['summary']['heading']['reid']}"
-            property.update({'revaluation': download_extract(url,index)})
-            if (property['revaluation']):
-                db_data.update({
-                    'status' : 'Complete',
-                    'pHeatedArea' : property['revaluation']['PreviousPropertyValueTotals']['Total Heated Area:'],
-                    'pBuildings' : property['revaluation']['PreviousPropertyValueTotals']['Building(s) :'],
-                    'pOutBuildings' : property['revaluation']['PreviousPropertyValueTotals']['Outbuilding(s) :'],
-                    'pLandValue' : property['revaluation']['PreviousPropertyValueTotals']['Land Value (Assessed) :'],
-                    'pBuldingValue' : property['revaluation']['PreviousPropertyValueTotals']['Building Value (Assessed) :'],
-                    'pTotalValue' : property['revaluation']['PreviousPropertyValueTotals']['Total Value (Assessed) :'],
-                    'pExempt' : property['revaluation']['PreviousValueAdjustmentTotals']['Exempt:'],
-                    'pUseValueDeferred' : property['revaluation']['PreviousValueAdjustmentTotals']['Use Value Deferred:'],
-                    'pHistoricalDeferral' : property['revaluation']['PreviousValueAdjustmentTotals']['Historical Value Deferred:'],
-                    'pTaxRelief' : property['revaluation']['PreviousValueAdjustmentTotals']['Tax Relief:'],
-                    'pDisabledVeteransExclusion' : property['revaluation']['PreviousValueAdjustmentTotals']['Disabled Veterans Exclusion:'],
-                    'pTotalAdjustmentValue' : property['revaluation']['PreviousValueAdjustmentTotals']['Total Adjustment Value:'],
-                    'pValueToBeBilled' : property['revaluation']['PreviousValueAdjustmentTotals']['Value To Be Billed:'],
-                })
-                try:
-                    float(db_data['pValueToBeBilled'])
-                except:
-                    db_data['pValueToBeBilled'] = 0
+    
+    if (property['revaluation']):
+        db_data.update({
+            'pHeatedArea' : property['revaluation']['PreviousPropertyValueTotals']['Total Heated Area:'],
+            'pBuildings' : property['revaluation']['PreviousPropertyValueTotals']['Building(s) :'],
+            'pOutBuildings' : property['revaluation']['PreviousPropertyValueTotals']['Outbuilding(s) :'],
+            'pLandValue' : property['revaluation']['PreviousPropertyValueTotals']['Land Value (Assessed) :'],
+            'pBuldingValue' : property['revaluation']['PreviousPropertyValueTotals']['Building Value (Assessed) :'],
+            'pTotalValue' : property['revaluation']['PreviousPropertyValueTotals']['Total Value (Assessed) :'],
+            'pExempt' : property['revaluation']['PreviousValueAdjustmentTotals']['Exempt:'],
+            'pUseValueDeferred' : property['revaluation']['PreviousValueAdjustmentTotals']['Use Value Deferred:'],
+            'pHistoricalDeferral' : property['revaluation']['PreviousValueAdjustmentTotals']['Historical Value Deferred:'],
+            'pTaxRelief' : property['revaluation']['PreviousValueAdjustmentTotals']['Tax Relief:'],
+            'pDisabledVeteransExclusion' : property['revaluation']['PreviousValueAdjustmentTotals']['Disabled Veterans Exclusion:'],
+            'pTotalAdjustmentValue' : property['revaluation']['PreviousValueAdjustmentTotals']['Total Adjustment Value:'],
+            'pValueToBeBilled' : property['revaluation']['PreviousValueAdjustmentTotals']['Value To Be Billed:'],
+        })
+        try:
+            float(db_data['pValueToBeBilled'])
+        except:
+            db_data['pValueToBeBilled'] = 0
 
-                if (db_data['pValueToBeBilled'] > 0):
-                    db_data.update({'ChangeInValue': (db_data['ValueToBeBilled']/db_data['pValueToBeBilled'])})
-        else:
-            db_data.update({'status' : 'Retired'})
-    print(db_data)
+        if (db_data['pValueToBeBilled'] > 0):
+            db_data.update({'ChangeInValue': (db_data['ValueToBeBilled']/db_data['pValueToBeBilled'])})
     # Insert the record into the database
-    cursor.execute('''INSERT OR REPLACE INTO tax_records VALUES (:id,:status,:reid,:Owners,:Location,:CorporateLimit,:PJ,:Zoning,:Township,:BuildingUse,:NBHD,:LandClass,:DeedDate,:SalePrice,
+    cursor.execute('''INSERT OR REPLACE INTO tax_records VALUES (:id,:status,:reid,:Owners,:Location,:CorporateLimit,:PJ,:Zoning,:Township,:BuildingUse,:NBHD,:LandClass,:BillingClass,:DeedDate,:SalePrice,
                    :HeatedArea,:Buildings,:OutBuildings,:LandValue,:BuldingValue,:TotalValue,:Exempt,:UseValueDeferred,:HistoricalDeferral,:TaxRelief,:DisabledVeteransExclusion,:TotalAdjustmentValue,:ValueToBeBilled,:PctBilled,
                    :pHeatedArea,:pBuildings,:pOutBuildings,:pLandValue,:pBuldingValue,:pTotalValue,:pExempt,:pUseValueDeferred,:pHistoricalDeferral,:pTaxRelief,:pDisabledVeteransExclusion,:pTotalAdjustmentValue,:pValueToBeBilled,:ChangeInValue)''', db_data)
-    cursor.execute('''INSERT OR REPLACE INTO raw_data (id, raw) VALUES (?, ?)''', (index, str(property)))
     conn.commit()
-    conn.close()
 
-    return(property)
+    return(status, property, db_data)
 
 # Parses input arguments from the command line
 def parse_args():
@@ -273,7 +279,12 @@ def parse_args():
         description="Script to acquire tax data",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
-
+    parser.add_argument(
+        "--rebuild",
+        action=argparse.BooleanOptionalAction,
+        dest="rebuild",
+        help="rebuild from db raw data",
+    )
     parser.add_argument(
         "--range",
         dest="range",
@@ -303,6 +314,8 @@ if __name__ == "__main__":
 
     # Define the range of tax records to download
     # Test Records 29949 (missing valuation), 550000 (no property)
+    # determine if trying to rebuild from raw
+    rebuild = bool(args.rebuild)
 
     # create the range
     id_list=[]
@@ -316,16 +329,18 @@ if __name__ == "__main__":
         print('must specify range')
         exit()
 
-    #print (id_list)
-
     # Download tax records, extract keys and values, and store them in the database
     pool_count = 10
     index = 0
     while index < len(id_list):
+        # Connect to SQLite database
+        conn = sqlite3.connect(database_file)
         ids = id_list[index:index+pool_count]
         with Pool(len(ids)) as p:
             data = p.map(download,ids)
-            print (ids)
+        print (ids)
+        conn.close()
+
         index = index + pool_count
 
     print('All tax records downloaded, keys and values extracted, and stored in the database.')
