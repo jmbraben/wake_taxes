@@ -349,3 +349,4 @@ if __name__ == "__main__":
 
     conn.close()
     print('All tax records downloaded, keys and values extracted, and stored in the database.')
+    print('############### MUST REMOVE DUPLICATE REIDs FROM THIS DATA #############################')
